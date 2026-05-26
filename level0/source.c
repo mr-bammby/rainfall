@@ -4,14 +4,14 @@
 #include <sys/types.h>
 #define _GNU_SOURCE
 
-#define HARDCODED_PASSWORD "423"
+#define HARDCODED_VALUE 423
 
 void main (int argc, char **argv)
 {
 	char	*cmd_args[2];
 
 	// Work as expected, password too easy to find
-    if (strncmp(HARDCODED_PASSWORD, argv[1], 3) != 0)
+    if (atoi(argv[1]) != HARDCODED_VALUE)
     {
 		fwrite("No!\n", 1, 4, stdout);
     }
