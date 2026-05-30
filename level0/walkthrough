@@ -1,0 +1,153 @@
+*** Level0 – Hardcoded Value Discovery (Static Analysis / ELF Reversing) ***
+
+** Overview **
+
+This challenge revolves around a classic reverse engineering pattern: a binary that performs an internal comparison against a hardcoded constant.
+
+The program directly embeds the expected value in its assembly. The goal is to recover this value through static analysis and use it to pass the check and gain a shell.
+
+** Attack Type **
+
+Hardcoded value extraction via static reverse engineering
+
+The vulnerability lies in a direct comparison between user input and a constant embedded in the binary with no obfuscation or runtime protection around the check
+
+This makes the challenge solvable entirely through disassembly inspection.
+
+** Reconnaissance **
+Initial execution
+
+Running the binary with arbitrary input confirms the expected behavior:
+
+./level0 test
+
+Output:
+
+No !
+
+This indicates:
+
+Input is processed
+A conditional check is failing
+There is a controlled failure path (likely a comparison gate)
+
+** Static Analysis **
+* Step 1 – Locate failure string *
+
+We first identify the "No !" string in the binary’s .rodata section:
+
+readelf -x .rodata level0 | grep "No \!"
+
+Example result:
+
+0x080c5350 4e6f2021 ...
+
+We store this address for later correlation:
+
+export STRING_ADDRESS="80c5350"
+
+At this stage, we know:
+
+The binary contains a failure message
+That message is likely tied to a conditional branch
+
+* Step 2 – Find references to the string *
+
+We now search where this string is used in code:
+
+objdump -d level0 | grep $STRING_ADDRESS
+
+Example:
+
+8048f5f: b8 50 53 0c 08    mov eax,0x80c5350
+
+This shows:
+
+The program loads the "No !" string into a register
+This instruction is part of a failure-handling path
+
+We mark this region for deeper inspection:
+
+export INSTRUCTION_ADDRESS="8048f5f"
+
+* Step 3 – Identify the comparison logic *
+
+Next, we inspect surrounding control flow:
+
+objdump -d level0 | grep $INSTRUCTION_ADDRESS -A20 -B20
+
+This reveals the critical logic inside main:
+
+8048ed4: call   atoi
+8048ed9: cmp    eax,0x1a7
+8048ede: jne    8048f58 <main+0x98>
+Key observation
+
+The program:
+
+1. Takes user input
+2. Converts it using atoi
+3. Compares the result to a constant: 0x1a7 = 423
+
+If the comparison fails:
+
+- Execution jumps to the "No !" path
+
+If it succeeds:
+
+- Execution continues into the success branch
+
+We extract and store the value:
+
+export HARDCODED_VALUE="423"
+
+* Step 4 – Identify success behavior *
+
+Further down in the binary, we observe:
+
+mov DWORD PTR [esp],0x80c5348
+call execv
+
+And in .rodata:
+
+readelf -x .rodata level0 | grep "/bin"
+
+Result:
+
+/bin/sh
+
+** Interpretation **
+
+If the comparison succeeds:
+
+- The program calls execv
+- It executes /bin/sh
+- This directly spawns a shell
+
+So the goal is simply to satisfy the integer check.
+
+** Exploitation **
+
+We now provide the required value:
+
+./level0 423
+
+If correct, the program bypasses the failure branch and spawns a shell.
+
+** Post-exploitation **
+
+After gaining shell access, the next step is retrieving the flag/password:
+
+cat /home/user/level1/.pass
+
+Flag
+1fe8a524fa4bec01ca4ea2a869af2a02260d4a7d5fe7e7c24d8617e6dca12d3a
+
+** Key Takeaways **
+- The challenge is a hardcoded constant comparison
+- Static analysis alone is sufficient (no runtime exploitation needed)
+- Control-flow inspection around conditional jumps quickly reveals the solution path
+
+** Summary **
+
+If the program directly compares input against a constant in assembly, the “exploit” is simply recovering that constant to bypass this step
