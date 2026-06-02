@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int g_chk = 0;
+int m = 0;
 
 void v(void)
 {
@@ -13,7 +13,7 @@ void v(void)
     // Security problem
     printf(buffer); 
 
-    if (g_chk == 64)
+    if (m == 64)
     {
         fwrite("Wait what?!\n", 1, 12, stdout);
         system("/bin/sh"); 
