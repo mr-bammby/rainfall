@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-int *g_auth = 0;
-char *g_service = 0;
+char *g_auth;
+char *g_service;
 
 
 int main()
@@ -37,7 +37,7 @@ int main()
             free(g_auth); 
         }
         // COMMAND: "service"
-        else if (strncmp(buf, "servic", 6) == 0)
+        else if (strncmp(buf, "service", 6) == 0)
         {
             // Allocates new memory without freeing previous one
             g_service = strdup(buf + 7);
