@@ -45,14 +45,14 @@ int main(int argc, char** argv)
         _exit(1); 
     }
 
-    // _Znwj is operator new(unsigned int). Size of anbj is 108bytes
+    // _Znwj is operator new(unsigned int). Size of an obj is 108bytes
     N* obj1 = new N(5); 
     N* obj2 = new N(6); 
 
     obj1->setAnnotation(argv[1]);
 
     // Assuming operator+ is the first virtual function in the vtable:
-    // This is true in level9 binary but can depend on compailer
+    // This is true in level9 binary but can depend on compiler
     *obj2 + *obj1; 
 
     // We could also call first function in 
