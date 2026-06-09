@@ -24,9 +24,9 @@ void p(char* dest, const char* prompt)
 
 void pp(char* dest) {
     // Based on arguments for strncpy in function p
-    char buf1[20]; 
-   // Based on arguments for strncpy in function p
-    char buf2[20]; 
+    char buf2[20];
+    // Based on arguments for strncpy in function p
+    char buf1[20];  
     unsigned int len;
     
     p(buf1, input_str);
@@ -42,7 +42,7 @@ void pp(char* dest) {
 
 int main()
 {
-    // Buffer size 64 bytes(Allocagted stack) - 22 bytes (Buffer offset)
+    // Buffer size 64 bytes (allocated stack) - 22 bytes (Buffer offset)
     char buf[42]; 
     
     pp(buf);
