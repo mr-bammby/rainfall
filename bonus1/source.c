@@ -3,7 +3,7 @@
 
 int main(int argc, char **argv)
 {
-    char buffer[40];                // ungefähr ab esp+0x14
+    char buffer[40];
     int value;
 
     value = atoi(argv[1]);
