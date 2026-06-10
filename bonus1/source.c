@@ -13,9 +13,8 @@ int main(int argc, char **argv)
 
     memcpy(buffer, argv[2], value * 4);
 
-    if (value == 0x574F4C46) {      // "FLOW"
+    if (value == 0x574F4C46)       // little endian representation equals the string "FLOW"
         execl("/bin/sh", "sh", NULL);
-    }
 
     return 0;
 }
